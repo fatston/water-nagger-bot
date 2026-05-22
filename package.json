@@ -1,0 +1,14 @@
+{
+  "name": "water-reminder-telegram-bot",
+  "version": "1.0.0",
+  "description": "A Telegram bot that reminds you to drink water and tracks daily intake.",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "check": "node --check src/bot.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "license": "MIT"
+}
