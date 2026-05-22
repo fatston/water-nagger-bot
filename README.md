@@ -17,8 +17,7 @@ A small Telegram bot that asks each user how often they want water reminders, tr
   - `Drank custom`
   - `How am I doing?`
 - Reminder check-ins:
-  - If you drank within your chosen interval, it reports how much you drank over that interval.
-  - If you have not, it nudges you to drink water.
+  - Reports today's total and how much more is needed to reach the daily target.
   - Reminder check-ins only run from 9am until midnight.
 - Daily total sent at your chosen end-of-day time, with a different message based on how much you drank.
 - Good morning hydration message every day at 9am.

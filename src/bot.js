@@ -361,16 +361,10 @@ async function maybeSendReminder(chatId, user, now) {
 
   if (now.getTime() - lastReminderAt.getTime() < intervalMs) return;
 
-  const since = new Date(now.getTime() - intervalMs);
-  const amount = totalSince(user, since);
   user.lastReminderAt = now.toISOString();
   store.save();
 
-  if (amount > 0) {
-    await sendMessage(chatId, "check-in: you have drank water yay! over the last " + formatDuration(user.intervalMinutes) + ", you have drank " + amount + "ml of water");
-  } else {
-    await sendMessage(chatId, "check-in: time to drink water. Reply with something like `I drank 250ml` after you do.");
-  }
+  await sendProgress(chatId, user);
 }
 
 function isReminderTime(date) {
@@ -554,12 +548,6 @@ function parseTime(text) {
 
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return pad(hour) + ":" + pad(minute);
-}
-
-function totalSince(user, since) {
-  return user.drinks.reduce(function (sum, drink) {
-    return new Date(drink.at).getTime() >= since.getTime() ? sum + drink.amountMl : sum;
-  }, 0);
 }
 
 function totalForLocalDate(user, dateKey) {
