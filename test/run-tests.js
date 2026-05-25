@@ -35,6 +35,14 @@ function createHarness(now) {
           return sum + entry.amountMl;
         }, 0);
       },
+      totalsByDate: async function (chatId, startDate, endDate) {
+        return lifetimeEntries.reduce(function (totals, entry) {
+          if (entry.chatId !== String(chatId)) return totals;
+          if (entry.localDate < startDate || entry.localDate > endDate) return totals;
+          totals[entry.localDate] = (totals[entry.localDate] || 0) + entry.amountMl;
+          return totals;
+        }, {});
+      },
       lifetimeTotal: async function (chatId) {
         return lifetimeEntries.reduce(function (sum, entry) {
           return entry.chatId === String(chatId) ? sum + entry.amountMl : sum;
@@ -151,6 +159,13 @@ test("unit: formats range and lifetime progress messages", function () {
   assert.ok(week.includes("Total: 3000ml"));
   assert.ok(week.includes("Goal: 14000ml"));
 
+  const weekDaily = bot.formatWeekProgressMessage({ "2026-05-25": 500, "2026-05-27": 1200 }, "2026-05-25", "2026-05-31", 2000);
+  assert.ok(weekDaily.includes("05/25"));
+  assert.ok(weekDaily.includes("500ml"));
+  assert.ok(weekDaily.includes("05/26"));
+  assert.ok(weekDaily.includes("0ml"));
+  assert.ok(weekDaily.includes("05/31"));
+
   const lifetime = bot.formatLifetimeProgressMessage(2500);
   assert.ok(lifetime.includes("🏆 Lifetime Progress"));
   assert.ok(lifetime.includes("2500ml"));
@@ -196,6 +211,12 @@ test("integration: /reset resets today's water only", async function () {
   assert.strictEqual(h.lifetimeEntries[0].localDate, "2026-05-24");
   assert.strictEqual(user.intervalMinutes, 60);
   assert.ok(h.lastText().includes("Today's water tracking has been reset"));
+
+  await bot.handleUpdate(h.message("/monthprogress"));
+  assert.ok(h.lastText().includes("Total: 250ml"));
+
+  await bot.handleUpdate(h.message("/lifetimeprogress"));
+  assert.ok(h.lastText().includes("Total: 250ml"));
 });
 
 test("integration: /resetall asks for confirmation before full setup reset", async function () {
@@ -359,8 +380,16 @@ test("integration: /weekprogress shows this week's lifetime data", async functio
 
   const text = h.lastText();
   assert.ok(text.includes("📅 Week Progress"));
-  assert.ok(text.includes("2026-05-25 to 2026-05-28"));
+  assert.ok(text.includes("2026-05-22 to 2026-05-28"));
   assert.ok(text.includes("Total: 1200ml"));
+  assert.ok(text.includes("05/22"));
+  assert.ok(text.includes("05/23"));
+  assert.ok(text.includes("05/24"));
+  assert.ok(text.includes("05/25"));
+  assert.ok(text.includes("05/26"));
+  assert.ok(text.includes("05/27"));
+  assert.ok(text.includes("05/28"));
+  assert.ok(text.includes("05/22 ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0ml"));
 });
 
 test("integration: old hyphenated progress and pause commands remain aliases", async function () {
@@ -407,14 +436,16 @@ test("integration: /lifetimeprogress shows all-time lifetime data", async functi
 
 test("integration: weekly progress sends once on Sunday at 10am", async function () {
   const h = createHarness("2026-05-31T02:00:00.000Z");
-  const user = addUser(h.store, { lastReminderAt: "2026-05-31T01:00:00.000Z" });
+  const user = addUser(h.store, { lastReminderAt: "2026-05-31T02:00:00.000Z" });
   h.addLifetimeEntry(500, "2026-05-25");
   h.addLifetimeEntry(700, "2026-05-31");
 
   await bot.runScheduler();
 
-  assert.ok(h.lastText().includes("📅 Weekly Progress"));
+  assert.ok(h.lastText().includes("Week Progress"));
   assert.ok(h.lastText().includes("Total: 1200ml"));
+  assert.ok(h.lastText().includes("05/25"));
+  assert.ok(h.lastText().includes("05/31"));
   assert.strictEqual(user.lastWeeklyProgressDate, "2026-05-31");
 
   const sentAfterFirstRun = h.sent.length;

@@ -427,14 +427,19 @@ async function sendCheckIn(chatId, user) {
 
 async function sendRangeProgress(chatId, range) {
   const now = nowProvider();
-  const start = range === "week" ? weekStartDateKey(now) : monthStartDateKey(now);
+  const start = range === "week" ? pastWeekStartDateKey(now) : monthStartDateKey(now);
   const end = localDateKey(now);
-  const total = await lifetimeStore.totalForRange(chatId, start, end);
   const days = daysBetweenDateKeys(start, end) + 1;
+  const total = await lifetimeStore.totalForRange(chatId, start, end);
   const goal = dailyWaterTargetMl * days;
-  const title = range === "week" ? "📅 Week Progress" : "🗓️ Month Progress";
 
-  await sendMessage(chatId, formatRangeProgressMessage(title, total, goal, start, end));
+  if (range === "week") {
+    const totalsByDate = await lifetimeStore.totalsByDate(chatId, start, end);
+    await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, end, dailyWaterTargetMl));
+    return;
+  }
+
+  await sendMessage(chatId, formatRangeProgressMessage("🗓️ Month Progress", total, goal, start, end));
 }
 
 async function sendLifetimeProgress(chatId) {
@@ -526,12 +531,11 @@ async function maybeSendWeeklyProgress(chatId, user, now) {
   if (weekday !== 0 || localTime !== "10:00") return;
   if (user.lastWeeklyProgressDate === dateKey) return;
 
-  const start = weekStartDateKey(now);
-  const total = await lifetimeStore.totalForRange(chatId, start, dateKey);
-  const goal = dailyWaterTargetMl * 7;
+  const start = pastWeekStartDateKey(now);
+  const totalsByDate = await lifetimeStore.totalsByDate(chatId, start, dateKey);
   user.lastWeeklyProgressDate = dateKey;
   store.save();
-  await sendMessage(chatId, formatRangeProgressMessage("📅 Weekly Progress", total, goal, start, dateKey));
+  await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, dateKey, dailyWaterTargetMl));
 }
 
 function intervalKeyboard() {
@@ -722,6 +726,10 @@ function weekStartDateKey(date) {
   return addDaysToDateKey(key, -daysSinceMonday);
 }
 
+function pastWeekStartDateKey(date) {
+  return addDaysToDateKey(localDateKey(date), -6);
+}
+
 function monthStartDateKey(date) {
   const parts = localParts(date);
   return parts.year + "-" + parts.month + "-01";
@@ -803,6 +811,26 @@ function formatRangeProgressMessage(title, totalMl, goalMl, startDate, endDate) 
   ].join("\n");
 }
 
+function formatWeekProgressMessage(totalsByDate, startDate, endDate, dailyGoalMl) {
+  const rows = [];
+  let total = 0;
+  let dateKey = startDate;
+
+  while (dateKey <= endDate) {
+    const amount = totalsByDate[dateKey] || 0;
+    total += amount;
+    rows.push(shortDateLabel(dateKey) + " " + progressBar(amount, dailyGoalMl) + " " + amount + "ml");
+    dateKey = addDaysToDateKey(dateKey, 1);
+  }
+
+  return [
+    "📅 Week Progress",
+    startDate + " to " + endDate,
+    "Total: " + total + "ml",
+    ""
+  ].concat(rows).join("\n");
+}
+
 function formatLifetimeProgressMessage(totalMl) {
   const liters = (totalMl / 1000).toFixed(totalMl % 1000 === 0 ? 0 : 1);
   return [
@@ -810,6 +838,11 @@ function formatLifetimeProgressMessage(totalMl) {
     "Total: " + totalMl + "ml",
     "That is about " + liters + "L logged."
   ].join("\n");
+}
+
+function shortDateLabel(dateKey) {
+  const parts = dateKey.split("-");
+  return parts[1] + "/" + parts[2];
 }
 
 function totalForLocalDate(user, dateKey) {
@@ -913,6 +946,26 @@ function createLifetimeStore(file) {
         );
       });
     },
+    totalsByDate: function (chatId, startDate, endDate) {
+      return new Promise(function (resolve, reject) {
+        db.all(
+          "SELECT local_date, COALESCE(SUM(amount_ml), 0) AS total FROM consumption WHERE chat_id = ? AND local_date >= ? AND local_date <= ? GROUP BY local_date",
+          [chatId, startDate, endDate],
+          function (error, rows) {
+            if (error) {
+              reject(error);
+              return;
+            }
+
+            const totals = {};
+            rows.forEach(function (row) {
+              totals[row.local_date] = row.total || 0;
+            });
+            resolve(totals);
+          }
+        );
+      });
+    },
     lifetimeTotal: function (chatId) {
       return new Promise(function (resolve, reject) {
         db.get(
@@ -961,6 +1014,9 @@ function createUnavailableLifetimeStore(error) {
     recordDrink: async function () {},
     totalForRange: async function () {
       return 0;
+    },
+    totalsByDate: async function () {
+      return {};
     },
     lifetimeTotal: async function () {
       return 0;
@@ -1083,8 +1139,10 @@ module.exports = {
   formatStatusMessage: formatStatusMessage,
   formatCheckInMessage: formatCheckInMessage,
   formatRangeProgressMessage: formatRangeProgressMessage,
+  formatWeekProgressMessage: formatWeekProgressMessage,
   formatLifetimeProgressMessage: formatLifetimeProgressMessage,
   weekStartDateKey: weekStartDateKey,
+  pastWeekStartDateKey: pastWeekStartDateKey,
   monthStartDateKey: monthStartDateKey,
   isReminderTime: isReminderTime,
   maybeSendDailySummary: maybeSendDailySummary,
