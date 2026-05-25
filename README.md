@@ -1,12 +1,13 @@
 # Water Reminder Telegram Bot
 
-A small Telegram bot that asks each user how often they want water reminders, tracks messages like `I drank 250ml`, and sends an end-of-day total.
+A small Telegram bot that reminds users to drink water, tracks messages like `I drank 250ml`, and summarizes progress over the day, week, month, and lifetime.
 
 ## Features
 
-- First-run setup with reminder choices: every 1h, 2h, 3h, or 6h.
+- First-run setup with a default 3-hour reminder interval.
 - Custom reminder intervals from 15 to 360 minutes with `/interval 60`.
 - End-of-day summary choices: 10pm, midnight, or a custom time.
+- SQLite lifetime consumption tracking.
 - Intake tracking from natural messages like:
   - `I drank 250ml`
   - `500 ml`
@@ -22,8 +23,9 @@ A small Telegram bot that asks each user how often they want water reminders, tr
   - Reminder check-ins only run from 9am until the configured end-of-day time.
 - `/shut-up` pauses reminders until the next day without clearing today's intake.
 - Daily total sent at your chosen end-of-day time, with a different message based on how much you drank.
+- Weekly progress sent automatically every Sunday at 10:00 in the configured bot timezone.
 - Good morning hydration message every day at 9am.
-- Local JSON persistence, no database server needed.
+- Local JSON settings plus SQLite consumption persistence, no database server needed.
 
 ## Setup
 
@@ -38,6 +40,7 @@ A small Telegram bot that asks each user how often they want water reminders, tr
 4. Start the bot:
 
    ```bash
+   npm install
    npm start
    ```
 
@@ -53,6 +56,9 @@ A small Telegram bot that asks each user how often they want water reminders, tr
 - `/help` - show command help.
 - `/drink 250` - log 250ml.
 - `/status` - show progress toward the daily target.
+- `/week-progress` - show this week's progress.
+- `/month-progress` - show this month's progress.
+- `/lifetime-progress` - show all-time logged water.
 - `/today` - show today's total.
 - `/summary` - show today's total.
 - `/reset` - reset setup and start over after confirmation.
@@ -78,7 +84,9 @@ npm test
 - `TELEGRAM_BOT_TOKEN` is required.
 - `BOT_TIMEZONE` defaults to `Asia/Singapore`.
 - `DATA_FILE` defaults to `./data/water-bot.json`.
+- `SQLITE_DB_FILE` defaults to `./data/water-bot.sqlite`.
 - `DAILY_WATER_TARGET_ML` defaults to `2000`.
+- `DEFAULT_REMINDER_INTERVAL_MINUTES` defaults to `180`.
 - `POLL_TIMEOUT_SECONDS` defaults to `25`.
 - `SCHEDULER_TICK_SECONDS` defaults to `30`.
 

@@ -9,9 +9,11 @@ loadDotEnv(path.resolve(process.cwd(), ".env"));
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const timezone = process.env.BOT_TIMEZONE || "Asia/Singapore";
 const dataFile = path.resolve(process.cwd(), process.env.DATA_FILE || "./data/water-bot.json");
+const sqliteFile = path.resolve(process.cwd(), process.env.SQLITE_DB_FILE || "./data/water-bot.sqlite");
 const pollTimeoutSeconds = parseInt(process.env.POLL_TIMEOUT_SECONDS || "25", 10);
 const schedulerTickMs = parseInt(process.env.SCHEDULER_TICK_SECONDS || "30", 10) * 1000;
 const dailyWaterTargetMl = parseInt(process.env.DAILY_WATER_TARGET_ML || "2000", 10);
+const defaultIntervalMinutes = parseInt(process.env.DEFAULT_REMINDER_INTERVAL_MINUTES || "180", 10);
 const reminderStartMinute = 9 * 60;
 const reminderEndMinute = 24 * 60;
 const shouldStart = require.main === module;
@@ -23,6 +25,7 @@ if (!token && shouldStart) {
 
 const apiBase = "https://api.telegram.org/bot" + token;
 let store = createStore(dataFile);
+let lifetimeStore = createLifetimeStore(sqliteFile);
 let apiRequest = api;
 let nowProvider = function () {
   return new Date();
@@ -63,6 +66,7 @@ function start() {
   console.log("Water reminder bot started.");
   console.log("Timezone:", timezone);
   console.log("Data file:", dataFile);
+  console.log("SQLite file:", sqliteFile);
 
   setInterval(runScheduler, schedulerTickMs);
   runScheduler();
@@ -140,7 +144,8 @@ async function handleUpdate(update) {
   }
 
   if (text === "/start") {
-    user.setupStep = "interval";
+    user.intervalMinutes = defaultIntervalMinutes;
+    user.setupStep = "end_time";
     user.startedAt = nowProvider().toISOString();
     store.save();
     await sendWelcome(chatId);
@@ -166,6 +171,21 @@ async function handleUpdate(update) {
 
   if (text === "/today" || text === "/summary") {
     await sendTodaySummary(chatId, user);
+    return;
+  }
+
+  if (text === "/week-progress") {
+    await sendRangeProgress(chatId, "week");
+    return;
+  }
+
+  if (text === "/month-progress") {
+    await sendRangeProgress(chatId, "month");
+    return;
+  }
+
+  if (text === "/lifetime-progress") {
+    await sendLifetimeProgress(chatId);
     return;
   }
 
@@ -254,9 +274,8 @@ async function handleCallback(query) {
     if (data.indexOf("interval:") === 0) {
       const minutes = parseInt(data.split(":")[1], 10);
       setIntervalMinutes(user, minutes);
-      user.setupStep = "end_time";
       await answerCallbackQuery(query.id, "Reminder interval saved");
-      await sendMessage(chatId, "Nice. How should I define the end of your day?", endTimeKeyboard());
+      await sendMessage(chatId, "⏰ Reminder interval saved: every " + formatDuration(minutes) + ".");
       return;
     }
 
@@ -293,8 +312,21 @@ function setIntervalMinutes(user, minutes) {
 async function sendWelcome(chatId) {
   await sendMessage(
     chatId,
-    "Hi. I will help you drink water and keep a daily total.\n\nHow often do you want a check-in?",
-    intervalKeyboard()
+    [
+      "👋 Welcome to Water Bot.",
+      "I will remind you every 3 hours by default and track your water over time.",
+      "",
+      "Useful commands:",
+      "/drink 250 - log water",
+      "/status - today's progress",
+      "/week-progress - this week",
+      "/month-progress - this month",
+      "/lifetime-progress - all-time total",
+      "/interval 60 - change reminders",
+      "",
+      "🌙 First, choose your end-of-day summary time:"
+    ].join("\n"),
+    endTimeKeyboard()
   );
 }
 
@@ -307,6 +339,9 @@ async function sendHelp(chatId) {
       "/help - show this list",
       "/drink 250 - log water",
       "/status - show progress",
+      "/week-progress - show this week's progress",
+      "/month-progress - show this month's progress",
+      "/lifetime-progress - show all-time progress",
       "/today - show today's total",
       "/reset - reset setup and start over",
       "/settings - change reminder setup",
@@ -324,7 +359,7 @@ async function sendSettings(chatId, user) {
   const endTime = user.endOfDayTime || "not set";
   await sendMessage(
     chatId,
-    "Current settings:\nReminder interval: " + interval + "\nDaily summary: " + endTime + "\n\nChoose a reminder interval:",
+    "⚙️ Current settings:\nReminder interval: " + interval + "\nDaily summary: " + endTime + "\n\nChoose a reminder interval:",
     intervalKeyboard()
   );
 }
@@ -337,14 +372,20 @@ async function recordDrink(chatId, user, amountMl) {
 
   user.drinks.push(entry);
   store.save();
+  await lifetimeStore.recordDrink({
+    chatId: chatId,
+    amountMl: amountMl,
+    at: entry.at,
+    localDate: localDateKey(nowProvider())
+  });
 
   const today = totalForLocalDate(user, localDateKey(nowProvider()));
-  await sendMessage(chatId, "Logged " + amountMl + "ml. Today's total is " + today + "ml.");
+  await sendMessage(chatId, "✅ Logged " + amountMl + "ml.\nToday: " + today + "ml.");
 }
 
 async function sendTodaySummary(chatId, user) {
   const total = totalForLocalDate(user, localDateKey(nowProvider()));
-  await sendMessage(chatId, "Today you have drunk " + total + "ml of water.");
+  await sendMessage(chatId, "💧 Today\n" + progressBar(total, dailyWaterTargetMl) + " " + total + "ml / " + dailyWaterTargetMl + "ml");
 }
 
 async function sendProgress(chatId, user) {
@@ -369,6 +410,23 @@ async function sendCheckIn(chatId, user) {
   await sendMessage(chatId, formatCheckInMessage(total, dailyWaterTargetMl));
 }
 
+async function sendRangeProgress(chatId, range) {
+  const now = nowProvider();
+  const start = range === "week" ? weekStartDateKey(now) : monthStartDateKey(now);
+  const end = localDateKey(now);
+  const total = await lifetimeStore.totalForRange(chatId, start, end);
+  const days = daysBetweenDateKeys(start, end) + 1;
+  const goal = dailyWaterTargetMl * days;
+  const title = range === "week" ? "📅 Week Progress" : "🗓️ Month Progress";
+
+  await sendMessage(chatId, formatRangeProgressMessage(title, total, goal, start, end));
+}
+
+async function sendLifetimeProgress(chatId) {
+  const total = await lifetimeStore.lifetimeTotal(chatId);
+  await sendMessage(chatId, formatLifetimeProgressMessage(total));
+}
+
 async function runScheduler() {
   const now = nowProvider();
   const chats = Object.keys(store.data.users);
@@ -381,6 +439,7 @@ async function runScheduler() {
       await maybeSendReminder(chatId, user, now);
       await maybeSendMorningMessage(chatId, user, now);
       await maybeSendDailySummary(chatId, user, now);
+      await maybeSendWeeklyProgress(chatId, user, now);
     } catch (error) {
       console.error("Scheduler error for chat " + chatId + ":", error.message);
     }
@@ -441,6 +500,25 @@ async function maybeSendDailySummary(chatId, user, now) {
   await sendMessage(chatId, dailySummaryMessage(total));
 }
 
+async function maybeSendWeeklyProgress(chatId, user, now) {
+  if (isPaused(user, now)) return;
+
+  const parts = localParts(now);
+  const dateKey = parts.year + "-" + parts.month + "-" + parts.day;
+  const localTime = parts.hour + ":" + parts.minute;
+  const weekday = weekdayForDateKey(dateKey);
+
+  if (weekday !== 0 || localTime !== "10:00") return;
+  if (user.lastWeeklyProgressDate === dateKey) return;
+
+  const start = weekStartDateKey(now);
+  const total = await lifetimeStore.totalForRange(chatId, start, dateKey);
+  const goal = dailyWaterTargetMl * 7;
+  user.lastWeeklyProgressDate = dateKey;
+  store.save();
+  await sendMessage(chatId, formatRangeProgressMessage("📅 Weekly Progress", total, goal, start, dateKey));
+}
+
 function intervalKeyboard() {
   return {
     reply_markup: {
@@ -499,7 +577,7 @@ function ensureUser(chatId, from) {
 
 function resetUser(chatId, from) {
   store.data.users[chatId] = createUser(chatId, from);
-  store.data.users[chatId].setupStep = "interval";
+  store.data.users[chatId].setupStep = "end_time";
   store.save();
   return store.data.users[chatId];
 }
@@ -508,13 +586,14 @@ function createUser(chatId, from) {
   return {
     chatId: chatId,
     firstName: from && from.first_name ? from.first_name : "",
-    intervalMinutes: null,
+    intervalMinutes: defaultIntervalMinutes,
     endOfDayTime: null,
     setupStep: null,
     startedAt: nowProvider().toISOString(),
     lastReminderAt: null,
     lastDailySummaryDate: null,
     lastMorningMessageDate: null,
+    lastWeeklyProgressDate: null,
     pausedUntilDate: null,
     drinks: []
   };
@@ -611,6 +690,43 @@ function nextLocalDateKey(date) {
   return localDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
 }
 
+function weekStartDateKey(date) {
+  const key = localDateKey(date);
+  const weekday = weekdayForDateKey(key);
+  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
+  return addDaysToDateKey(key, -daysSinceMonday);
+}
+
+function monthStartDateKey(date) {
+  const parts = localParts(date);
+  return parts.year + "-" + parts.month + "-01";
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const parts = dateKey.split("-").map(function (part) {
+    return parseInt(part, 10);
+  });
+  const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + days));
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetweenDateKeys(startDate, endDate) {
+  const start = dateKeyToUtc(startDate);
+  const end = dateKeyToUtc(endDate);
+  return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function weekdayForDateKey(dateKey) {
+  return dateKeyToUtc(dateKey).getUTCDay();
+}
+
+function dateKeyToUtc(dateKey) {
+  const parts = dateKey.split("-").map(function (part) {
+    return parseInt(part, 10);
+  });
+  return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+}
+
 function isPaused(user, date) {
   if (!user.pausedUntilDate) return false;
   return localDateKey(date) < user.pausedUntilDate;
@@ -647,6 +763,27 @@ function formatCheckInMessage(totalMl, goalMl) {
     progressBar(totalMl, goalMl) + " " + totalMl + "ml / " + goalMl + "ml",
     "Remaining: " + remaining + "ml",
     prompt
+  ].join("\n");
+}
+
+function formatRangeProgressMessage(title, totalMl, goalMl, startDate, endDate) {
+  const remaining = Math.max(goalMl - totalMl, 0);
+  return [
+    title,
+    startDate + " to " + endDate,
+    progressBar(totalMl, goalMl) + " " + progressPercent(totalMl, goalMl) + "%",
+    "Total: " + totalMl + "ml",
+    "Goal: " + goalMl + "ml",
+    "Remaining: " + remaining + "ml"
+  ].join("\n");
+}
+
+function formatLifetimeProgressMessage(totalMl) {
+  const liters = (totalMl / 1000).toFixed(totalMl % 1000 === 0 ? 0 : 1);
+  return [
+    "🏆 Lifetime Progress",
+    "Total: " + totalMl + "ml",
+    "That is about " + liters + "L logged."
   ].join("\n");
 }
 
@@ -705,6 +842,79 @@ function createStore(file) {
     data: data,
     save: function () {
       fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    }
+  };
+}
+
+function createLifetimeStore(file) {
+  let sqlite3;
+  try {
+    sqlite3 = require("sqlite3").verbose();
+  } catch (error) {
+    return createUnavailableLifetimeStore(error);
+  }
+
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const db = new sqlite3.Database(file);
+  db.serialize(function () {
+    db.run("CREATE TABLE IF NOT EXISTS consumption (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, amount_ml INTEGER NOT NULL, at TEXT NOT NULL, local_date TEXT NOT NULL)");
+    db.run("CREATE INDEX IF NOT EXISTS idx_consumption_chat_date ON consumption (chat_id, local_date)");
+  });
+
+  return {
+    recordDrink: function (entry) {
+      return new Promise(function (resolve, reject) {
+        db.run(
+          "INSERT INTO consumption (chat_id, amount_ml, at, local_date) VALUES (?, ?, ?, ?)",
+          [entry.chatId, entry.amountMl, entry.at, entry.localDate],
+          function (error) {
+            if (error) reject(error);
+            else resolve();
+          }
+        );
+      });
+    },
+    totalForRange: function (chatId, startDate, endDate) {
+      return new Promise(function (resolve, reject) {
+        db.get(
+          "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM consumption WHERE chat_id = ? AND local_date >= ? AND local_date <= ?",
+          [chatId, startDate, endDate],
+          function (error, row) {
+            if (error) reject(error);
+            else resolve(row.total || 0);
+          }
+        );
+      });
+    },
+    lifetimeTotal: function (chatId) {
+      return new Promise(function (resolve, reject) {
+        db.get(
+          "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM consumption WHERE chat_id = ?",
+          [chatId],
+          function (error, row) {
+            if (error) reject(error);
+            else resolve(row.total || 0);
+          }
+        );
+      });
+    }
+  };
+}
+
+function createUnavailableLifetimeStore(error) {
+  if (shouldStart) {
+    console.warn("SQLite lifetime tracking is unavailable. Run `npm install` to install sqlite3. " + error.message);
+  }
+
+  return {
+    recordDrink: async function () {},
+    totalForRange: async function () {
+      return 0;
+    },
+    lifetimeTotal: async function () {
+      return 0;
     }
   };
 }
@@ -800,6 +1010,7 @@ function configureForTest(options) {
     store = options.store;
     updateOffset = store.data.meta.updateOffset || 0;
   }
+  if (options.lifetimeStore) lifetimeStore = options.lifetimeStore;
   if (options.apiRequest) apiRequest = options.apiRequest;
   if (options.nowProvider) nowProvider = options.nowProvider;
 }
@@ -809,6 +1020,7 @@ module.exports = {
   handleUpdate: handleUpdate,
   runScheduler: runScheduler,
   createStore: createStore,
+  createLifetimeStore: createLifetimeStore,
   createUser: createUser,
   parseWaterAmount: parseWaterAmount,
   parseIntervalMinutes: parseIntervalMinutes,
@@ -817,6 +1029,11 @@ module.exports = {
   progressBar: progressBar,
   formatStatusMessage: formatStatusMessage,
   formatCheckInMessage: formatCheckInMessage,
+  formatRangeProgressMessage: formatRangeProgressMessage,
+  formatLifetimeProgressMessage: formatLifetimeProgressMessage,
+  weekStartDateKey: weekStartDateKey,
+  monthStartDateKey: monthStartDateKey,
   isReminderTime: isReminderTime,
-  maybeSendDailySummary: maybeSendDailySummary
+  maybeSendDailySummary: maybeSendDailySummary,
+  maybeSendWeeklyProgress: maybeSendWeeklyProgress
 };

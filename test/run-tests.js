@@ -11,6 +11,7 @@ function test(name, fn) {
 
 function createHarness(now) {
   const sent = [];
+  const lifetimeEntries = [];
   const store = {
     data: { meta: {}, users: {} },
     saves: 0,
@@ -22,6 +23,24 @@ function createHarness(now) {
 
   bot.configureForTest({
     store: store,
+    lifetimeStore: {
+      entries: lifetimeEntries,
+      recordDrink: async function (entry) {
+        lifetimeEntries.push(entry);
+      },
+      totalForRange: async function (chatId, startDate, endDate) {
+        return lifetimeEntries.reduce(function (sum, entry) {
+          if (entry.chatId !== String(chatId)) return sum;
+          if (entry.localDate < startDate || entry.localDate > endDate) return sum;
+          return sum + entry.amountMl;
+        }, 0);
+      },
+      lifetimeTotal: async function (chatId) {
+        return lifetimeEntries.reduce(function (sum, entry) {
+          return entry.chatId === String(chatId) ? sum + entry.amountMl : sum;
+        }, 0);
+      }
+    },
     nowProvider: function () {
       return currentNow;
     },
@@ -36,6 +55,15 @@ function createHarness(now) {
   return {
     store: store,
     sent: sent,
+    lifetimeEntries: lifetimeEntries,
+    addLifetimeEntry: function (amountMl, localDate, chatId) {
+      lifetimeEntries.push({
+        chatId: String(chatId || 1),
+        amountMl: amountMl,
+        at: localDate + "T02:00:00.000Z",
+        localDate: localDate
+      });
+    },
     setNow: function (iso) {
       currentNow = new Date(iso);
     },
@@ -102,12 +130,27 @@ test("unit: formats status and check-in messages", function () {
   assert.ok(checkIn.includes("750ml / 2000ml"));
 });
 
+test("unit: formats range and lifetime progress messages", function () {
+  const week = bot.formatRangeProgressMessage("📅 Week Progress", 3000, 14000, "2026-05-25", "2026-05-31");
+  assert.ok(week.includes("📅 Week Progress"));
+  assert.ok(week.includes("Total: 3000ml"));
+  assert.ok(week.includes("Goal: 14000ml"));
+
+  const lifetime = bot.formatLifetimeProgressMessage(2500);
+  assert.ok(lifetime.includes("🏆 Lifetime Progress"));
+  assert.ok(lifetime.includes("2500ml"));
+  assert.ok(lifetime.includes("2.5L"));
+});
+
 test("integration: /help returns slash command list", async function () {
   const h = createHarness();
   await bot.handleUpdate(h.message("/help"));
   const text = h.lastText();
   assert.ok(text.includes("/reset"));
   assert.ok(text.includes("/status"));
+  assert.ok(text.includes("/week-progress"));
+  assert.ok(text.includes("/month-progress"));
+  assert.ok(text.includes("/lifetime-progress"));
   assert.ok(text.includes("/interval 60"));
   assert.ok(text.includes("/shut-up"));
   assert.strictEqual(text.includes("how am I doing?"), false);
@@ -140,11 +183,24 @@ test("integration: reset confirmation clears settings and restarts setup", async
   await bot.handleUpdate(h.callback("reset:confirm"));
 
   const user = h.store.data.users["1"];
-  assert.strictEqual(user.intervalMinutes, null);
+  assert.strictEqual(user.intervalMinutes, 180);
   assert.strictEqual(user.endOfDayTime, null);
-  assert.strictEqual(user.setupStep, "interval");
+  assert.strictEqual(user.setupStep, "end_time");
   assert.deepStrictEqual(user.drinks, []);
-  assert.ok(h.sent[h.sent.length - 1].payload.text.includes("How often do you want a check-in?"));
+  assert.ok(h.sent[h.sent.length - 1].payload.text.includes("choose your end-of-day summary time"));
+});
+
+test("integration: /start uses a 3 hour default and asks for end-of-day", async function () {
+  const h = createHarness();
+
+  await bot.handleUpdate(h.message("/start"));
+
+  const user = h.store.data.users["1"];
+  assert.strictEqual(user.intervalMinutes, 180);
+  assert.strictEqual(user.setupStep, "end_time");
+  assert.ok(h.lastText().includes("every 3 hours by default"));
+  assert.ok(h.lastText().includes("/interval 60"));
+  assert.ok(h.sent[h.sent.length - 1].payload.reply_markup.inline_keyboard[0][0].callback_data.indexOf("end:") === 0);
 });
 
 test("integration: /shut-up pauses reminders until next day", async function () {
@@ -215,6 +271,79 @@ test("integration: /status returns Status Update format", async function () {
   assert.ok(text.includes("💧 Status Update"));
   assert.ok(text.includes("Intake: 750ml"));
   assert.ok(text.includes("Remaining: 1250ml"));
+});
+
+test("integration: drinking water writes to lifetime store", async function () {
+  const h = createHarness("2026-05-25T02:00:00.000Z");
+  addUser(h.store);
+
+  await bot.handleUpdate(h.message("/drink 250"));
+
+  assert.strictEqual(h.lifetimeEntries.length, 1);
+  assert.strictEqual(h.lifetimeEntries[0].amountMl, 250);
+  assert.strictEqual(h.lifetimeEntries[0].localDate, "2026-05-25");
+});
+
+test("integration: /week-progress shows this week's lifetime data", async function () {
+  const h = createHarness("2026-05-28T02:00:00.000Z");
+  addUser(h.store);
+  h.addLifetimeEntry(500, "2026-05-25");
+  h.addLifetimeEntry(700, "2026-05-28");
+  h.addLifetimeEntry(900, "2026-05-18");
+
+  await bot.handleUpdate(h.message("/week-progress"));
+
+  const text = h.lastText();
+  assert.ok(text.includes("📅 Week Progress"));
+  assert.ok(text.includes("2026-05-25 to 2026-05-28"));
+  assert.ok(text.includes("Total: 1200ml"));
+});
+
+test("integration: /month-progress shows this month's lifetime data", async function () {
+  const h = createHarness("2026-05-28T02:00:00.000Z");
+  addUser(h.store);
+  h.addLifetimeEntry(500, "2026-05-01");
+  h.addLifetimeEntry(700, "2026-05-28");
+  h.addLifetimeEntry(900, "2026-04-30");
+
+  await bot.handleUpdate(h.message("/month-progress"));
+
+  const text = h.lastText();
+  assert.ok(text.includes("🗓️ Month Progress"));
+  assert.ok(text.includes("2026-05-01 to 2026-05-28"));
+  assert.ok(text.includes("Total: 1200ml"));
+});
+
+test("integration: /lifetime-progress shows all-time lifetime data", async function () {
+  const h = createHarness("2026-05-28T02:00:00.000Z");
+  addUser(h.store);
+  h.addLifetimeEntry(500, "2026-05-01");
+  h.addLifetimeEntry(700, "2026-05-28");
+  h.addLifetimeEntry(900, "2026-04-30");
+
+  await bot.handleUpdate(h.message("/lifetime-progress"));
+
+  const text = h.lastText();
+  assert.ok(text.includes("🏆 Lifetime Progress"));
+  assert.ok(text.includes("Total: 2100ml"));
+  assert.ok(text.includes("2.1L"));
+});
+
+test("integration: weekly progress sends once on Sunday at 10am", async function () {
+  const h = createHarness("2026-05-31T02:00:00.000Z");
+  const user = addUser(h.store, { lastReminderAt: "2026-05-31T01:00:00.000Z" });
+  h.addLifetimeEntry(500, "2026-05-25");
+  h.addLifetimeEntry(700, "2026-05-31");
+
+  await bot.runScheduler();
+
+  assert.ok(h.lastText().includes("📅 Weekly Progress"));
+  assert.ok(h.lastText().includes("Total: 1200ml"));
+  assert.strictEqual(user.lastWeeklyProgressDate, "2026-05-31");
+
+  const sentAfterFirstRun = h.sent.length;
+  await bot.runScheduler();
+  assert.strictEqual(h.sent.length, sentAfterFirstRun);
 });
 
 test("integration: reminder uses Check-in format with progress", async function () {

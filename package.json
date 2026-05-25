@@ -11,5 +11,8 @@
   "engines": {
     "node": ">=14"
   },
+  "dependencies": {
+    "sqlite3": "^5.1.7"
+  },
   "license": "MIT"
 }
