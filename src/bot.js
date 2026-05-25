@@ -106,9 +106,13 @@ async function handleUpdate(update) {
   if (!text) return;
 
   if (text === "/reset" || text.toLowerCase() === "reset") {
-    resetToday(user);
+    user.setupStep = "confirm_reset";
     store.save();
-    await sendMessage(chatId, "Today's water tracking has been reset. Your settings are unchanged.");
+    await sendMessage(
+      chatId,
+      "Reset your water bot setup? This will clear your settings and today's logged water. You will need to set up reminders again.",
+      resetConfirmKeyboard()
+    );
     return;
   }
 
@@ -304,7 +308,7 @@ async function sendHelp(chatId) {
       "/drink 250 - log water",
       "/status - show progress",
       "/today - show today's total",
-      "/reset - reset today's tracking",
+      "/reset - reset setup and start over",
       "/settings - change reminder setup",
       "/interval 60 - set reminder interval in minutes",
       "/end 22:00 - set daily summary time",
@@ -498,13 +502,6 @@ function resetUser(chatId, from) {
   store.data.users[chatId].setupStep = "interval";
   store.save();
   return store.data.users[chatId];
-}
-
-function resetToday(user) {
-  const today = localDateKey(nowProvider());
-  user.drinks = user.drinks.filter(function (drink) {
-    return localDateKey(new Date(drink.at)) !== today;
-  });
 }
 
 function createUser(chatId, from) {

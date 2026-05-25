@@ -48,6 +48,16 @@ function createHarness(now) {
         }
       };
     },
+    callback: function (data, chatId) {
+      return {
+        callback_query: {
+          id: "callback-" + data,
+          data: data,
+          from: { id: chatId || 1, first_name: "Test" },
+          message: { chat: { id: chatId || 1 } }
+        }
+      };
+    },
     lastText: function () {
       return sent[sent.length - 1].payload.text;
     }
@@ -103,7 +113,7 @@ test("integration: /help returns slash command list", async function () {
   assert.strictEqual(text.includes("how am I doing?"), false);
 });
 
-test("integration: /reset resets today's amount only", async function () {
+test("integration: /reset asks for confirmation before full setup reset", async function () {
   const h = createHarness("2026-05-25T02:00:00.000Z");
   const user = addUser(h.store, {
     drinks: [
@@ -114,10 +124,27 @@ test("integration: /reset resets today's amount only", async function () {
 
   await bot.handleUpdate(h.message("/reset"));
 
-  assert.strictEqual(user.drinks.length, 1);
-  assert.strictEqual(user.drinks[0].amountMl, 250);
+  assert.strictEqual(user.drinks.length, 2);
   assert.strictEqual(user.intervalMinutes, 60);
-  assert.ok(h.lastText().includes("settings are unchanged"));
+  assert.strictEqual(user.setupStep, "confirm_reset");
+  assert.ok(h.lastText().includes("Reset your water bot setup?"));
+  assert.strictEqual(h.sent[h.sent.length - 1].payload.reply_markup.inline_keyboard[0][0].callback_data, "reset:confirm");
+});
+
+test("integration: reset confirmation clears settings and restarts setup", async function () {
+  const h = createHarness("2026-05-25T02:00:00.000Z");
+  addUser(h.store, {
+    drinks: [{ amountMl: 500, at: "2026-05-25T02:00:00.000Z" }]
+  });
+
+  await bot.handleUpdate(h.callback("reset:confirm"));
+
+  const user = h.store.data.users["1"];
+  assert.strictEqual(user.intervalMinutes, null);
+  assert.strictEqual(user.endOfDayTime, null);
+  assert.strictEqual(user.setupStep, "interval");
+  assert.deepStrictEqual(user.drinks, []);
+  assert.ok(h.sent[h.sent.length - 1].payload.text.includes("How often do you want a check-in?"));
 });
 
 test("integration: /shut-up pauses reminders until next day", async function () {

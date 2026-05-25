@@ -55,7 +55,7 @@ A small Telegram bot that asks each user how often they want water reminders, tr
 - `/status` - show progress toward the daily target.
 - `/today` - show today's total.
 - `/summary` - show today's total.
-- `/reset` - reset today's water tracking only.
+- `/reset` - reset setup and start over after confirmation.
 - `/settings` - show current settings and setup buttons.
 - `/interval 60` - set reminder interval in minutes. Values must be from 15 to 360.
 - `/end 22:30` - set end-of-day summary time.
