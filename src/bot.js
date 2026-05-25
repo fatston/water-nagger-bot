@@ -110,12 +110,18 @@ async function handleUpdate(update) {
   if (!text) return;
 
   if (text === "/reset" || text.toLowerCase() === "reset") {
-    user.setupStep = "confirm_reset";
+    await resetToday(chatId, user);
+    await sendMessage(chatId, "🔄 Today's water tracking has been reset.");
+    return;
+  }
+
+  if (text === "/resetall") {
+    user.setupStep = "confirm_reset_all";
     store.save();
     await sendMessage(
       chatId,
-      "Reset your water bot setup? This will clear your settings and today's logged water. You will need to set up reminders again.",
-      resetConfirmKeyboard()
+      "⚠️ Reset everything? This will clear your settings, today's tracking, and all saved progress for you.",
+      resetAllConfirmKeyboard()
     );
     return;
   }
@@ -166,6 +172,13 @@ async function handleUpdate(update) {
     user.pausedUntilDate = nextLocalDateKey(nowProvider());
     store.save();
     await sendMessage(chatId, "Paused for today. I will check in again tomorrow.");
+    return;
+  }
+
+  if (text === "/starttalking") {
+    user.pausedUntilDate = null;
+    store.save();
+    await sendMessage(chatId, "🔔 I am back. Reminders are on again.");
     return;
   }
 
@@ -255,15 +268,15 @@ async function handleCallback(query) {
   const data = query.data || "";
 
   try {
-    if (data === "reset:confirm") {
-      resetUser(chatId, query.from);
+    if (data === "resetall:confirm") {
+      await resetAll(chatId, query.from);
       await answerCallbackQuery(query.id, "Reset complete");
-      await sendMessage(chatId, "Reset complete. Let's set you up again.");
+      await sendMessage(chatId, "🧹 Reset complete. Let's set you up again.");
       await sendWelcome(chatId);
       return;
     }
 
-    if (data === "reset:cancel") {
+    if (data === "resetall:cancel") {
       user.setupStep = null;
       store.save();
       await answerCallbackQuery(query.id, "Reset cancelled");
@@ -343,11 +356,13 @@ async function sendHelp(chatId) {
       "/monthprogress - show this month's progress",
       "/lifetimeprogress - show all-time progress",
       "/today - show today's total",
-      "/reset - reset setup and start over",
+      "/reset - reset today's water",
+      "/resetall - reset everything",
       "/settings - change reminder setup",
       "/interval 60 - set reminder interval in minutes",
       "/end 22:00 - set daily summary time",
       "/shutup - pause reminders until tomorrow",
+      "/starttalking - resume reminders",
       "",
       "You can still log water with messages like `I drank 500ml`."
     ].join("\n")
@@ -554,13 +569,13 @@ function quickDrinkKeyboard() {
   };
 }
 
-function resetConfirmKeyboard() {
+function resetAllConfirmKeyboard() {
   return {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "Yes, reset", callback_data: "reset:confirm" },
-          { text: "Cancel", callback_data: "reset:cancel" }
+          { text: "Yes, reset everything", callback_data: "resetall:confirm" },
+          { text: "Cancel", callback_data: "resetall:cancel" }
         ]
       ]
     }
@@ -575,7 +590,17 @@ function ensureUser(chatId, from) {
   return store.data.users[chatId];
 }
 
-function resetUser(chatId, from) {
+async function resetToday(chatId, user) {
+  const today = localDateKey(nowProvider());
+  user.drinks = user.drinks.filter(function (drink) {
+    return localDateKey(new Date(drink.at)) !== today;
+  });
+  store.save();
+  await lifetimeStore.deleteForRange(chatId, today, today);
+}
+
+async function resetAll(chatId, from) {
+  await lifetimeStore.deleteUser(chatId);
   store.data.users[chatId] = createUser(chatId, from);
   store.data.users[chatId].setupStep = "end_time";
   store.save();
@@ -899,6 +924,30 @@ function createLifetimeStore(file) {
           }
         );
       });
+    },
+    deleteForRange: function (chatId, startDate, endDate) {
+      return new Promise(function (resolve, reject) {
+        db.run(
+          "DELETE FROM consumption WHERE chat_id = ? AND local_date >= ? AND local_date <= ?",
+          [chatId, startDate, endDate],
+          function (error) {
+            if (error) reject(error);
+            else resolve();
+          }
+        );
+      });
+    },
+    deleteUser: function (chatId) {
+      return new Promise(function (resolve, reject) {
+        db.run(
+          "DELETE FROM consumption WHERE chat_id = ?",
+          [chatId],
+          function (error) {
+            if (error) reject(error);
+            else resolve();
+          }
+        );
+      });
     }
   };
 }
@@ -914,6 +963,10 @@ function createUnavailableLifetimeStore(error) {
       return 0;
     },
     lifetimeTotal: async function () {
+      return 0;
+    },
+    deleteForRange: async function () {},
+    deleteUser: async function () {
       return 0;
     }
   };

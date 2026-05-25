@@ -39,6 +39,21 @@ function createHarness(now) {
         return lifetimeEntries.reduce(function (sum, entry) {
           return entry.chatId === String(chatId) ? sum + entry.amountMl : sum;
         }, 0);
+      },
+      deleteForRange: async function (chatId, startDate, endDate) {
+        for (let index = lifetimeEntries.length - 1; index >= 0; index -= 1) {
+          const entry = lifetimeEntries[index];
+          if (entry.chatId === String(chatId) && entry.localDate >= startDate && entry.localDate <= endDate) {
+            lifetimeEntries.splice(index, 1);
+          }
+        }
+      },
+      deleteUser: async function (chatId) {
+        for (let index = lifetimeEntries.length - 1; index >= 0; index -= 1) {
+          if (lifetimeEntries[index].chatId === String(chatId)) {
+            lifetimeEntries.splice(index, 1);
+          }
+        }
       }
     },
     nowProvider: function () {
@@ -147,12 +162,14 @@ test("integration: /help returns slash command list", async function () {
   await bot.handleUpdate(h.message("/help"));
   const text = h.lastText();
   assert.ok(text.includes("/reset"));
+  assert.ok(text.includes("/resetall"));
   assert.ok(text.includes("/status"));
   assert.ok(text.includes("/weekprogress"));
   assert.ok(text.includes("/monthprogress"));
   assert.ok(text.includes("/lifetimeprogress"));
   assert.ok(text.includes("/interval 60"));
   assert.ok(text.includes("/shutup"));
+  assert.ok(text.includes("/starttalking"));
   assert.strictEqual(text.includes("/week-progress"), false);
   assert.strictEqual(text.includes("/month-progress"), false);
   assert.strictEqual(text.includes("/lifetime-progress"), false);
@@ -160,7 +177,7 @@ test("integration: /help returns slash command list", async function () {
   assert.strictEqual(text.includes("how am I doing?"), false);
 });
 
-test("integration: /reset asks for confirmation before full setup reset", async function () {
+test("integration: /reset resets today's water only", async function () {
   const h = createHarness("2026-05-25T02:00:00.000Z");
   const user = addUser(h.store, {
     drinks: [
@@ -168,29 +185,50 @@ test("integration: /reset asks for confirmation before full setup reset", async 
       { amountMl: 500, at: "2026-05-25T02:00:00.000Z" }
     ]
   });
+  h.addLifetimeEntry(250, "2026-05-24");
+  h.addLifetimeEntry(500, "2026-05-25");
 
   await bot.handleUpdate(h.message("/reset"));
 
-  assert.strictEqual(user.drinks.length, 2);
+  assert.strictEqual(user.drinks.length, 1);
+  assert.strictEqual(user.drinks[0].amountMl, 250);
+  assert.strictEqual(h.lifetimeEntries.length, 1);
+  assert.strictEqual(h.lifetimeEntries[0].localDate, "2026-05-24");
   assert.strictEqual(user.intervalMinutes, 60);
-  assert.strictEqual(user.setupStep, "confirm_reset");
-  assert.ok(h.lastText().includes("Reset your water bot setup?"));
-  assert.strictEqual(h.sent[h.sent.length - 1].payload.reply_markup.inline_keyboard[0][0].callback_data, "reset:confirm");
+  assert.ok(h.lastText().includes("Today's water tracking has been reset"));
 });
 
-test("integration: reset confirmation clears settings and restarts setup", async function () {
+test("integration: /resetall asks for confirmation before full setup reset", async function () {
+  const h = createHarness("2026-05-25T02:00:00.000Z");
+  const user = addUser(h.store, {
+    drinks: [{ amountMl: 500, at: "2026-05-25T02:00:00.000Z" }]
+  });
+
+  await bot.handleUpdate(h.message("/resetall"));
+
+  assert.strictEqual(user.drinks.length, 1);
+  assert.strictEqual(user.setupStep, "confirm_reset_all");
+  assert.ok(h.lastText().includes("Reset everything?"));
+  assert.strictEqual(h.sent[h.sent.length - 1].payload.reply_markup.inline_keyboard[0][0].callback_data, "resetall:confirm");
+});
+
+test("integration: resetall confirmation clears settings and user db rows", async function () {
   const h = createHarness("2026-05-25T02:00:00.000Z");
   addUser(h.store, {
     drinks: [{ amountMl: 500, at: "2026-05-25T02:00:00.000Z" }]
   });
+  h.addLifetimeEntry(500, "2026-05-25");
+  h.addLifetimeEntry(700, "2026-05-24", 2);
 
-  await bot.handleUpdate(h.callback("reset:confirm"));
+  await bot.handleUpdate(h.callback("resetall:confirm"));
 
   const user = h.store.data.users["1"];
   assert.strictEqual(user.intervalMinutes, 180);
   assert.strictEqual(user.endOfDayTime, null);
   assert.strictEqual(user.setupStep, "end_time");
   assert.deepStrictEqual(user.drinks, []);
+  assert.strictEqual(h.lifetimeEntries.length, 1);
+  assert.strictEqual(h.lifetimeEntries[0].chatId, "2");
   assert.ok(h.sent[h.sent.length - 1].payload.text.includes("choose your end-of-day summary time"));
 });
 
@@ -222,6 +260,16 @@ test("integration: /shutup pauses reminders until next day", async function () {
   h.setNow("2026-05-26T02:00:00.000Z");
   await bot.runScheduler();
   assert.ok(h.lastText().includes("🚰 Check-in"));
+});
+
+test("integration: /starttalking resumes reminders", async function () {
+  const h = createHarness("2026-05-25T02:00:00.000Z");
+  const user = addUser(h.store, { pausedUntilDate: "2026-05-26" });
+
+  await bot.handleUpdate(h.message("/starttalking"));
+
+  assert.strictEqual(user.pausedUntilDate, null);
+  assert.ok(h.lastText().includes("Reminders are on again"));
 });
 
 test("integration: /interval 60 updates reminder interval", async function () {
