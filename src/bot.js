@@ -435,7 +435,7 @@ async function sendRangeProgress(chatId, range) {
 
   if (range === "week") {
     const totalsByDate = await lifetimeStore.totalsByDate(chatId, start, end);
-    await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, end, dailyWaterTargetMl));
+    await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, end, dailyWaterTargetMl, now));
     return;
   }
 
@@ -535,7 +535,7 @@ async function maybeSendWeeklyProgress(chatId, user, now) {
   const totalsByDate = await lifetimeStore.totalsByDate(chatId, start, dateKey);
   user.lastWeeklyProgressDate = dateKey;
   store.save();
-  await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, dateKey, dailyWaterTargetMl));
+  await sendMessage(chatId, formatWeekProgressMessage(totalsByDate, start, dateKey, dailyWaterTargetMl, now));
 }
 
 function intervalKeyboard() {
@@ -811,7 +811,7 @@ function formatRangeProgressMessage(title, totalMl, goalMl, startDate, endDate) 
   ].join("\n");
 }
 
-function formatWeekProgressMessage(totalsByDate, startDate, endDate, dailyGoalMl) {
+function formatWeekProgressMessage(totalsByDate, startDate, endDate, dailyGoalMl, now) {
   const rows = [];
   let total = 0;
   let dateKey = startDate;
@@ -825,7 +825,7 @@ function formatWeekProgressMessage(totalsByDate, startDate, endDate, dailyGoalMl
 
   return [
     "📅 Week Progress",
-    startDate + " to " + endDate,
+    formatDateTimeRange(startDate, endDate, now),
     "Total: " + total + "ml",
     ""
   ].concat(rows).join("\n");
@@ -843,6 +843,16 @@ function formatLifetimeProgressMessage(totalMl) {
 function shortDateLabel(dateKey) {
   const parts = dateKey.split("-");
   return parts[1] + "/" + parts[2];
+}
+
+function formatDateTimeRange(startDate, endDate, now) {
+  const endTime = localTimeLabel(now || nowProvider());
+  return startDate + " 00:00 to " + endDate + " " + endTime;
+}
+
+function localTimeLabel(date) {
+  const parts = localParts(date);
+  return parts.hour + ":" + parts.minute;
 }
 
 function totalForLocalDate(user, dateKey) {
@@ -1141,6 +1151,7 @@ module.exports = {
   formatRangeProgressMessage: formatRangeProgressMessage,
   formatWeekProgressMessage: formatWeekProgressMessage,
   formatLifetimeProgressMessage: formatLifetimeProgressMessage,
+  formatDateTimeRange: formatDateTimeRange,
   weekStartDateKey: weekStartDateKey,
   pastWeekStartDateKey: pastWeekStartDateKey,
   monthStartDateKey: monthStartDateKey,

@@ -159,7 +159,8 @@ test("unit: formats range and lifetime progress messages", function () {
   assert.ok(week.includes("Total: 3000ml"));
   assert.ok(week.includes("Goal: 14000ml"));
 
-  const weekDaily = bot.formatWeekProgressMessage({ "2026-05-25": 500, "2026-05-27": 1200 }, "2026-05-25", "2026-05-31", 2000);
+  const weekDaily = bot.formatWeekProgressMessage({ "2026-05-25": 500, "2026-05-27": 1200 }, "2026-05-25", "2026-05-31", 2000, new Date("2026-05-31T02:30:00.000Z"));
+  assert.ok(weekDaily.includes("2026-05-25 00:00 to 2026-05-31 10:30"));
   assert.ok(weekDaily.includes("05/25"));
   assert.ok(weekDaily.includes("500ml"));
   assert.ok(weekDaily.includes("05/26"));
@@ -380,7 +381,7 @@ test("integration: /weekprogress shows this week's lifetime data", async functio
 
   const text = h.lastText();
   assert.ok(text.includes("📅 Week Progress"));
-  assert.ok(text.includes("2026-05-22 to 2026-05-28"));
+  assert.ok(text.includes("2026-05-22 00:00 to 2026-05-28 10:00"));
   assert.ok(text.includes("Total: 1200ml"));
   assert.ok(text.includes("05/22"));
   assert.ok(text.includes("05/23"));
