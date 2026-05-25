@@ -148,11 +148,15 @@ test("integration: /help returns slash command list", async function () {
   const text = h.lastText();
   assert.ok(text.includes("/reset"));
   assert.ok(text.includes("/status"));
-  assert.ok(text.includes("/week-progress"));
-  assert.ok(text.includes("/month-progress"));
-  assert.ok(text.includes("/lifetime-progress"));
+  assert.ok(text.includes("/weekprogress"));
+  assert.ok(text.includes("/monthprogress"));
+  assert.ok(text.includes("/lifetimeprogress"));
   assert.ok(text.includes("/interval 60"));
-  assert.ok(text.includes("/shut-up"));
+  assert.ok(text.includes("/shutup"));
+  assert.strictEqual(text.includes("/week-progress"), false);
+  assert.strictEqual(text.includes("/month-progress"), false);
+  assert.strictEqual(text.includes("/lifetime-progress"), false);
+  assert.strictEqual(text.includes("/shut-up"), false);
   assert.strictEqual(text.includes("how am I doing?"), false);
 });
 
@@ -203,11 +207,11 @@ test("integration: /start uses a 3 hour default and asks for end-of-day", async 
   assert.ok(h.sent[h.sent.length - 1].payload.reply_markup.inline_keyboard[0][0].callback_data.indexOf("end:") === 0);
 });
 
-test("integration: /shut-up pauses reminders until next day", async function () {
+test("integration: /shutup pauses reminders until next day", async function () {
   const h = createHarness("2026-05-25T02:00:00.000Z");
   const user = addUser(h.store);
 
-  await bot.handleUpdate(h.message("/shut-up"));
+  await bot.handleUpdate(h.message("/shutup"));
   assert.strictEqual(user.pausedUntilDate, "2026-05-26");
   assert.ok(h.lastText().includes("Paused for today"));
 
@@ -228,6 +232,18 @@ test("integration: /interval 60 updates reminder interval", async function () {
 
   assert.strictEqual(user.intervalMinutes, 60);
   assert.ok(h.lastText().includes("60 minutes"));
+});
+
+test("integration: reply keyboard shows help and status buttons", async function () {
+  const h = createHarness();
+
+  await bot.handleUpdate(h.message("/help"));
+
+  const keyboard = h.sent[h.sent.length - 1].payload.reply_markup.keyboard;
+  assert.deepStrictEqual(keyboard, [
+    [{ text: "Drank 250ml" }, { text: "Drank 500ml" }],
+    [{ text: "/status" }, { text: "/help" }]
+  ]);
 });
 
 test("integration: invalid interval input returns helpful error", async function () {
@@ -284,14 +300,14 @@ test("integration: drinking water writes to lifetime store", async function () {
   assert.strictEqual(h.lifetimeEntries[0].localDate, "2026-05-25");
 });
 
-test("integration: /week-progress shows this week's lifetime data", async function () {
+test("integration: /weekprogress shows this week's lifetime data", async function () {
   const h = createHarness("2026-05-28T02:00:00.000Z");
   addUser(h.store);
   h.addLifetimeEntry(500, "2026-05-25");
   h.addLifetimeEntry(700, "2026-05-28");
   h.addLifetimeEntry(900, "2026-05-18");
 
-  await bot.handleUpdate(h.message("/week-progress"));
+  await bot.handleUpdate(h.message("/weekprogress"));
 
   const text = h.lastText();
   assert.ok(text.includes("📅 Week Progress"));
@@ -299,14 +315,26 @@ test("integration: /week-progress shows this week's lifetime data", async functi
   assert.ok(text.includes("Total: 1200ml"));
 });
 
-test("integration: /month-progress shows this month's lifetime data", async function () {
+test("integration: old hyphenated progress and pause commands remain aliases", async function () {
+  const h = createHarness("2026-05-28T02:00:00.000Z");
+  const user = addUser(h.store);
+  h.addLifetimeEntry(500, "2026-05-25");
+
+  await bot.handleUpdate(h.message("/week-progress"));
+  assert.ok(h.lastText().includes("📅 Week Progress"));
+
+  await bot.handleUpdate(h.message("/shut-up"));
+  assert.strictEqual(user.pausedUntilDate, "2026-05-29");
+});
+
+test("integration: /monthprogress shows this month's lifetime data", async function () {
   const h = createHarness("2026-05-28T02:00:00.000Z");
   addUser(h.store);
   h.addLifetimeEntry(500, "2026-05-01");
   h.addLifetimeEntry(700, "2026-05-28");
   h.addLifetimeEntry(900, "2026-04-30");
 
-  await bot.handleUpdate(h.message("/month-progress"));
+  await bot.handleUpdate(h.message("/monthprogress"));
 
   const text = h.lastText();
   assert.ok(text.includes("🗓️ Month Progress"));
@@ -314,14 +342,14 @@ test("integration: /month-progress shows this month's lifetime data", async func
   assert.ok(text.includes("Total: 1200ml"));
 });
 
-test("integration: /lifetime-progress shows all-time lifetime data", async function () {
+test("integration: /lifetimeprogress shows all-time lifetime data", async function () {
   const h = createHarness("2026-05-28T02:00:00.000Z");
   addUser(h.store);
   h.addLifetimeEntry(500, "2026-05-01");
   h.addLifetimeEntry(700, "2026-05-28");
   h.addLifetimeEntry(900, "2026-04-30");
 
-  await bot.handleUpdate(h.message("/lifetime-progress"));
+  await bot.handleUpdate(h.message("/lifetimeprogress"));
 
   const text = h.lastText();
   assert.ok(text.includes("🏆 Lifetime Progress"));

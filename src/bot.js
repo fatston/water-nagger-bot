@@ -162,7 +162,7 @@ async function handleUpdate(update) {
     return;
   }
 
-  if (text === "/shut-up") {
+  if (text === "/shutup" || text === "/shut-up") {
     user.pausedUntilDate = nextLocalDateKey(nowProvider());
     store.save();
     await sendMessage(chatId, "Paused for today. I will check in again tomorrow.");
@@ -174,17 +174,17 @@ async function handleUpdate(update) {
     return;
   }
 
-  if (text === "/week-progress") {
+  if (text === "/weekprogress" || text === "/week-progress") {
     await sendRangeProgress(chatId, "week");
     return;
   }
 
-  if (text === "/month-progress") {
+  if (text === "/monthprogress" || text === "/month-progress") {
     await sendRangeProgress(chatId, "month");
     return;
   }
 
-  if (text === "/lifetime-progress") {
+  if (text === "/lifetimeprogress" || text === "/lifetime-progress") {
     await sendLifetimeProgress(chatId);
     return;
   }
@@ -319,9 +319,9 @@ async function sendWelcome(chatId) {
       "Useful commands:",
       "/drink 250 - log water",
       "/status - today's progress",
-      "/week-progress - this week",
-      "/month-progress - this month",
-      "/lifetime-progress - all-time total",
+      "/weekprogress - this week",
+      "/monthprogress - this month",
+      "/lifetimeprogress - all-time total",
       "/interval 60 - change reminders",
       "",
       "🌙 First, choose your end-of-day summary time:"
@@ -334,20 +334,20 @@ async function sendHelp(chatId) {
   await sendMessage(
     chatId,
     [
-      "Water bot commands:",
+      "💧 Water bot commands:",
       "/start - set up reminders",
       "/help - show this list",
       "/drink 250 - log water",
       "/status - show progress",
-      "/week-progress - show this week's progress",
-      "/month-progress - show this month's progress",
-      "/lifetime-progress - show all-time progress",
+      "/weekprogress - show this week's progress",
+      "/monthprogress - show this month's progress",
+      "/lifetimeprogress - show all-time progress",
       "/today - show today's total",
       "/reset - reset setup and start over",
       "/settings - change reminder setup",
       "/interval 60 - set reminder interval in minutes",
       "/end 22:00 - set daily summary time",
-      "/shut-up - pause reminders until tomorrow",
+      "/shutup - pause reminders until tomorrow",
       "",
       "You can still log water with messages like `I drank 500ml`."
     ].join("\n")
@@ -546,7 +546,7 @@ function quickDrinkKeyboard() {
   return {
     keyboard: [
       [{ text: "Drank 250ml" }, { text: "Drank 500ml" }],
-      [{ text: "Drank custom" }, { text: "/status" }]
+      [{ text: "/status" }, { text: "/help" }]
     ],
     resize_keyboard: true,
     one_time_keyboard: false,

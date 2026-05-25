@@ -16,12 +16,12 @@ A small Telegram bot that reminds users to drink water, tracks messages like `I 
 - Persistent Telegram buttons for:
   - `Drank 250ml`
   - `Drank 500ml`
-  - `Drank custom`
   - `/status`
+  - `/help`
 - Reminder check-ins:
   - Reports today's total, remaining amount, and a compact progress bar.
   - Reminder check-ins only run from 9am until the configured end-of-day time.
-- `/shut-up` pauses reminders until the next day without clearing today's intake.
+- `/shutup` pauses reminders until the next day without clearing today's intake.
 - Daily total sent at your chosen end-of-day time, with a different message based on how much you drank.
 - Weekly progress sent automatically every Sunday at 10:00 in the configured bot timezone.
 - Good morning hydration message every day at 9am.
@@ -56,18 +56,18 @@ A small Telegram bot that reminds users to drink water, tracks messages like `I 
 - `/help` - show command help.
 - `/drink 250` - log 250ml.
 - `/status` - show progress toward the daily target.
-- `/week-progress` - show this week's progress.
-- `/month-progress` - show this month's progress.
-- `/lifetime-progress` - show all-time logged water.
+- `/weekprogress` - show this week's progress.
+- `/monthprogress` - show this month's progress.
+- `/lifetimeprogress` - show all-time logged water.
 - `/today` - show today's total.
 - `/summary` - show today's total.
 - `/reset` - reset setup and start over after confirmation.
 - `/settings` - show current settings and setup buttons.
 - `/interval 60` - set reminder interval in minutes. Values must be from 15 to 360.
 - `/end 22:30` - set end-of-day summary time.
-- `/shut-up` - pause reminders until tomorrow.
+- `/shutup` - pause reminders until tomorrow.
 
-You can also tap `Drank custom`, then reply with a number such as `360` to log 360ml.
+You can also send a number such as `360` or a message like `I drank 500ml`.
 
 Tap `/status` to see today's total and how much more is needed to reach the daily target. The default target is 2000ml.
 
