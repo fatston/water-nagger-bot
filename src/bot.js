@@ -14,14 +14,19 @@ const schedulerTickMs = parseInt(process.env.SCHEDULER_TICK_SECONDS || "30", 10)
 const dailyWaterTargetMl = parseInt(process.env.DAILY_WATER_TARGET_ML || "2000", 10);
 const reminderStartMinute = 9 * 60;
 const reminderEndMinute = 24 * 60;
+const shouldStart = require.main === module;
 
-if (!token) {
+if (!token && shouldStart) {
   console.error("Missing TELEGRAM_BOT_TOKEN. Copy .env.example to .env and add your BotFather token.");
   process.exit(1);
 }
 
 const apiBase = "https://api.telegram.org/bot" + token;
-const store = createStore(dataFile);
+let store = createStore(dataFile);
+let apiRequest = api;
+let nowProvider = function () {
+  return new Date();
+};
 let updateOffset = store.data.meta.updateOffset || 0;
 
 const intervalOptions = [
@@ -30,6 +35,9 @@ const intervalOptions = [
   { label: "Every 3h", minutes: 180 },
   { label: "Every 6h", minutes: 360 }
 ];
+
+const minIntervalMinutes = 15;
+const maxIntervalMinutes = 6 * 60;
 
 const endTimeOptions = [
   { label: "10pm", value: "22:00" },
@@ -49,7 +57,7 @@ const morningMessages = [
   "Good morning! Staying hydrated is one of those simple habits that quietly helps over time 💧"
 ];
 
-start();
+if (shouldStart) start();
 
 function start() {
   console.log("Water reminder bot started.");
@@ -64,7 +72,7 @@ function start() {
 async function pollLoop() {
   while (true) {
     try {
-      const result = await api("getUpdates", {
+      const result = await apiRequest("getUpdates", {
         offset: updateOffset,
         timeout: pollTimeoutSeconds,
         allowed_updates: ["message", "callback_query"]
@@ -97,14 +105,10 @@ async function handleUpdate(update) {
 
   if (!text) return;
 
-  if (text.toLowerCase() === "reset") {
-    user.setupStep = "confirm_reset";
+  if (text === "/reset" || text.toLowerCase() === "reset") {
+    resetToday(user);
     store.save();
-    await sendMessage(
-      chatId,
-      "Reset your water bot setup? This will clear your settings and today's logged water. You will need to register again.",
-      resetConfirmKeyboard()
-    );
+    await sendMessage(chatId, "Today's water tracking has been reset. Your settings are unchanged.");
     return;
   }
 
@@ -115,8 +119,8 @@ async function handleUpdate(update) {
     return;
   }
 
-  if (text.toLowerCase() === "how am i doing?") {
-    await sendProgress(chatId, user);
+  if (text === "/status" || text.toLowerCase() === "how am i doing?") {
+    await sendStatus(chatId, user);
     return;
   }
 
@@ -133,7 +137,7 @@ async function handleUpdate(update) {
 
   if (text === "/start") {
     user.setupStep = "interval";
-    user.startedAt = new Date().toISOString();
+    user.startedAt = nowProvider().toISOString();
     store.save();
     await sendWelcome(chatId);
     return;
@@ -146,6 +150,13 @@ async function handleUpdate(update) {
 
   if (text === "/settings") {
     await sendSettings(chatId, user);
+    return;
+  }
+
+  if (text === "/shut-up") {
+    user.pausedUntilDate = nextLocalDateKey(nowProvider());
+    store.save();
+    await sendMessage(chatId, "Paused for today. I will check in again tomorrow.");
     return;
   }
 
@@ -165,13 +176,17 @@ async function handleUpdate(update) {
   }
 
   if (text.indexOf("/interval") === 0) {
-    const minutes = parseDurationMinutes(text.replace("/interval", ""));
+    const minutes = parseIntervalMinutes(text.replace("/interval", ""));
     if (!minutes) {
-      await sendMessage(chatId, "Use `/interval 2h` or `/interval 90m`.");
+      await sendMessage(chatId, "Use `/interval 60` to set reminders every 60 minutes.");
+      return;
+    }
+    if (!isValidInterval(minutes)) {
+      await sendMessage(chatId, "Please choose an interval from 15 to 360 minutes.");
       return;
     }
     setIntervalMinutes(user, minutes);
-    await sendMessage(chatId, "Done. I will check in every " + formatDuration(minutes) + ".");
+    await sendMessage(chatId, "Done. I will check in every " + minutes + " minutes.");
     return;
   }
 
@@ -267,7 +282,7 @@ async function handleCallback(query) {
 
 function setIntervalMinutes(user, minutes) {
   user.intervalMinutes = minutes;
-  user.lastReminderAt = new Date().toISOString();
+  user.lastReminderAt = nowProvider().toISOString();
   store.save();
 }
 
@@ -284,13 +299,18 @@ async function sendHelp(chatId) {
     chatId,
     [
       "Water bot commands:",
-      "/drink 250 - log 250ml",
+      "/start - set up reminders",
+      "/help - show this list",
+      "/drink 250 - log water",
+      "/status - show progress",
       "/today - show today's total",
+      "/reset - reset today's tracking",
       "/settings - change reminder setup",
-      "/interval 2h - set reminder interval",
+      "/interval 60 - set reminder interval in minutes",
       "/end 22:00 - set daily summary time",
+      "/shut-up - pause reminders until tomorrow",
       "",
-      "You can also just say `I drank 500ml` or `drank 0.5L`."
+      "You can still log water with messages like `I drank 500ml`."
     ].join("\n")
   );
 }
@@ -308,23 +328,23 @@ async function sendSettings(chatId, user) {
 async function recordDrink(chatId, user, amountMl) {
   const entry = {
     amountMl: amountMl,
-    at: new Date().toISOString()
+    at: nowProvider().toISOString()
   };
 
   user.drinks.push(entry);
   store.save();
 
-  const today = totalForLocalDate(user, localDateKey(new Date()));
+  const today = totalForLocalDate(user, localDateKey(nowProvider()));
   await sendMessage(chatId, "Logged " + amountMl + "ml. Today's total is " + today + "ml.");
 }
 
 async function sendTodaySummary(chatId, user) {
-  const total = totalForLocalDate(user, localDateKey(new Date()));
+  const total = totalForLocalDate(user, localDateKey(nowProvider()));
   await sendMessage(chatId, "Today you have drunk " + total + "ml of water.");
 }
 
 async function sendProgress(chatId, user) {
-  const total = totalForLocalDate(user, localDateKey(new Date()));
+  const total = totalForLocalDate(user, localDateKey(nowProvider()));
   const remaining = Math.max(dailyWaterTargetMl - total, 0);
 
   if (remaining === 0) {
@@ -335,8 +355,18 @@ async function sendProgress(chatId, user) {
   await sendMessage(chatId, "You have drunk " + total + "ml today. Aim for " + dailyWaterTargetMl + "ml, so you need about " + remaining + "ml more today.");
 }
 
+async function sendStatus(chatId, user) {
+  const total = totalForLocalDate(user, localDateKey(nowProvider()));
+  await sendMessage(chatId, formatStatusMessage(total, dailyWaterTargetMl));
+}
+
+async function sendCheckIn(chatId, user) {
+  const total = totalForLocalDate(user, localDateKey(nowProvider()));
+  await sendMessage(chatId, formatCheckInMessage(total, dailyWaterTargetMl));
+}
+
 async function runScheduler() {
-  const now = new Date();
+  const now = nowProvider();
   const chats = Object.keys(store.data.users);
 
   for (const chatId of chats) {
@@ -354,7 +384,8 @@ async function runScheduler() {
 }
 
 async function maybeSendReminder(chatId, user, now) {
-  if (!isReminderTime(now)) return;
+  if (isPaused(user, now)) return;
+  if (!isReminderTime(now, user)) return;
 
   const intervalMs = user.intervalMinutes * 60 * 1000;
   const lastReminderAt = user.lastReminderAt ? new Date(user.lastReminderAt) : new Date(0);
@@ -364,16 +395,19 @@ async function maybeSendReminder(chatId, user, now) {
   user.lastReminderAt = now.toISOString();
   store.save();
 
-  await sendProgress(chatId, user);
+  await sendCheckIn(chatId, user);
 }
 
-function isReminderTime(date) {
+function isReminderTime(date, user) {
   const parts = localParts(date);
   const minuteOfDay = parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10);
-  return minuteOfDay >= reminderStartMinute && minuteOfDay < reminderEndMinute;
+  const endMinute = user && user.endOfDayTime ? timeToMinutes(user.endOfDayTime) : reminderEndMinute;
+  return minuteOfDay >= reminderStartMinute && minuteOfDay < endMinute;
 }
 
 async function maybeSendMorningMessage(chatId, user, now) {
+  if (isPaused(user, now)) return;
+
   const parts = localParts(now);
   const localTime = parts.hour + ":" + parts.minute;
   const dateKey = parts.year + "-" + parts.month + "-" + parts.day;
@@ -387,6 +421,8 @@ async function maybeSendMorningMessage(chatId, user, now) {
 }
 
 async function maybeSendDailySummary(chatId, user, now) {
+  if (isPaused(user, now)) return;
+
   const parts = localParts(now);
   const localTime = parts.hour + ":" + parts.minute;
   const summaryDate = user.endOfDayTime === "00:00" ? new Date(now.getTime() - 60 * 1000) : now;
@@ -428,7 +464,7 @@ function quickDrinkKeyboard() {
   return {
     keyboard: [
       [{ text: "Drank 250ml" }, { text: "Drank 500ml" }],
-      [{ text: "Drank custom" }, { text: "How am I doing?" }]
+      [{ text: "Drank custom" }, { text: "/status" }]
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -464,6 +500,13 @@ function resetUser(chatId, from) {
   return store.data.users[chatId];
 }
 
+function resetToday(user) {
+  const today = localDateKey(nowProvider());
+  user.drinks = user.drinks.filter(function (drink) {
+    return localDateKey(new Date(drink.at)) !== today;
+  });
+}
+
 function createUser(chatId, from) {
   return {
     chatId: chatId,
@@ -471,10 +514,11 @@ function createUser(chatId, from) {
     intervalMinutes: null,
     endOfDayTime: null,
     setupStep: null,
-    startedAt: new Date().toISOString(),
+    startedAt: nowProvider().toISOString(),
     lastReminderAt: null,
     lastDailySummaryDate: null,
     lastMorningMessageDate: null,
+    pausedUntilDate: null,
     drinks: []
   };
 }
@@ -535,6 +579,16 @@ function parseDurationMinutes(text) {
   return Math.round(minutes);
 }
 
+function parseIntervalMinutes(text) {
+  const trimmed = String(text).trim().toLowerCase();
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  return parseDurationMinutes(trimmed);
+}
+
+function isValidInterval(minutes) {
+  return Number.isInteger(minutes) && minutes >= minIntervalMinutes && minutes <= maxIntervalMinutes;
+}
+
 function parseTime(text) {
   const match = String(text).trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
   if (!match) return null;
@@ -548,6 +602,55 @@ function parseTime(text) {
 
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return pad(hour) + ":" + pad(minute);
+}
+
+function timeToMinutes(time) {
+  if (time === "00:00") return reminderEndMinute;
+  const parts = String(time).split(":");
+  return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+}
+
+function nextLocalDateKey(date) {
+  return localDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
+}
+
+function isPaused(user, date) {
+  if (!user.pausedUntilDate) return false;
+  return localDateKey(date) < user.pausedUntilDate;
+}
+
+function progressBar(totalMl, goalMl) {
+  const blocks = 10;
+  const ratio = goalMl > 0 ? Math.min(totalMl / goalMl, 1) : 1;
+  const filled = Math.round(ratio * blocks);
+  return "🟦".repeat(filled) + "⬜".repeat(blocks - filled);
+}
+
+function progressPercent(totalMl, goalMl) {
+  if (goalMl <= 0) return 100;
+  return Math.round((totalMl / goalMl) * 100);
+}
+
+function formatStatusMessage(totalMl, goalMl) {
+  const remaining = Math.max(goalMl - totalMl, 0);
+  return [
+    "💧 Status Update",
+    progressBar(totalMl, goalMl) + " " + progressPercent(totalMl, goalMl) + "%",
+    "Intake: " + totalMl + "ml",
+    "Goal: " + goalMl + "ml",
+    "Remaining: " + remaining + "ml"
+  ].join("\n");
+}
+
+function formatCheckInMessage(totalMl, goalMl) {
+  const remaining = Math.max(goalMl - totalMl, 0);
+  const prompt = remaining === 0 ? "Goal reached. Nice work." : "Time for a glass of water.";
+  return [
+    "🚰 Check-in",
+    progressBar(totalMl, goalMl) + " " + totalMl + "ml / " + goalMl + "ml",
+    "Remaining: " + remaining + "ml",
+    prompt
+  ].join("\n");
 }
 
 function totalForLocalDate(user, dateKey) {
@@ -678,11 +781,11 @@ function sendMessage(chatId, text, extra) {
     reply_markup: quickDrinkKeyboard()
   }, extra || {});
 
-  return api("sendMessage", payload);
+  return apiRequest("sendMessage", payload);
 }
 
 function answerCallbackQuery(callbackQueryId, text) {
-  return api("answerCallbackQuery", {
+  return apiRequest("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
     text: text
   });
@@ -693,3 +796,30 @@ function sleep(ms) {
     setTimeout(resolve, ms);
   });
 }
+
+function configureForTest(options) {
+  options = options || {};
+  if (options.store) {
+    store = options.store;
+    updateOffset = store.data.meta.updateOffset || 0;
+  }
+  if (options.apiRequest) apiRequest = options.apiRequest;
+  if (options.nowProvider) nowProvider = options.nowProvider;
+}
+
+module.exports = {
+  configureForTest: configureForTest,
+  handleUpdate: handleUpdate,
+  runScheduler: runScheduler,
+  createStore: createStore,
+  createUser: createUser,
+  parseWaterAmount: parseWaterAmount,
+  parseIntervalMinutes: parseIntervalMinutes,
+  isValidInterval: isValidInterval,
+  parseTime: parseTime,
+  progressBar: progressBar,
+  formatStatusMessage: formatStatusMessage,
+  formatCheckInMessage: formatCheckInMessage,
+  isReminderTime: isReminderTime,
+  maybeSendDailySummary: maybeSendDailySummary
+};
